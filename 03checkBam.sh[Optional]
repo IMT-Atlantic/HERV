@@ -1,0 +1,62 @@
+#!/bin/bash
+set -euo pipefail
+
+# -------------------- 参数配置 -------------------- 
+BAM_DIR="/home/yangpeida/BanqueDonee/HERV/GSE227647/bamSTAR"
+PREPROCESS_DIR="${BAM_DIR}/processed"
+THREADS=15
+LOG_FILE="${PREPROCESS_DIR}/preprocess_$(date +%Y%m%d_%H%M%S).log"
+
+# -------------------- 初始化 -------------------- 
+mkdir -p "${PREPROCESS_DIR}"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+logger() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# -------------------- 智能排序校验 --------------------
+process_bam() {
+    local src="$1"
+    local fname=$(basename "${src%.*}")_processed.bam
+    local dest="${PREPROCESS_DIR}/${fname}"
+    
+    # 检查是否已处理
+    if [[ -f "${dest}" && -f "${dest}.bai" ]]; then
+        logger "跳过已处理文件: ${src}"
+        return 0
+    fi
+
+    # 检查排序状态
+    if ! samtools view -H "$src" | grep -q 'SO:coordinate'; then
+        logger "开始排序: ${src}"
+        samtools sort -@ 4 -m 2G -o "${dest}" "$src"
+        samtools index -@ 4 "${dest}"
+        logger "排序完成: ${dest}"
+    else
+        logger "已排序文件: ${src}"
+        ln -sf "$src" "${dest}"
+        if [[ ! -f "${src}.bai" ]]; then
+            samtools index -@ 4 "${dest}"
+        fi
+    fi
+    
+    # 最终校验
+    if samtools quickcheck -q "${dest}"; then
+        echo "${dest}" >> "${PREPROCESS_DIR}/valid_bams.list"
+        return 0
+    else
+        logger "校验失败: ${dest}"
+        return 1
+    fi
+}
+
+# -------------------- 并行处理 -------------------- 
+export -f process_bam logger
+export PREPROCESS_DIR BAM_DIR
+
+logger "启动预处理..."
+find "${BAM_DIR}" -name "*.bam" -print0 | \
+    xargs -0 -P ${THREADS} -I {} bash -c 'process_bam "$@"' _ {}
+
+logger "预处理完成，有效文件数: $(wc -l < "${PREPROCESS_DIR}/valid_bams.list")"
