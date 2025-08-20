@@ -1,34 +1,30 @@
 #!/bin/bash
-# SRA智能处理脚本（完全兼容现有目录结构）
-# SRA提取并改写为fastq文件
 
 # 全局配置
 THREADS=15
 SRR_LIST=(SRR239076{07..21}) 
-BASE_DIR="/home/yuetong/YANGPeida/bank/ERV/GSE227647/"  # 固定基础路径
+BASE_DIR="/home/yuetong/YANGPeida/bank/ERV/GSE227647/" 
 LOG_FILE="${BASE_DIR}/sra_processing.log"
 
 # 日志初始化
 echo "==== 任务启动: $(date) ====" > $LOG_FILE
 
-# 函数：智能下载器（适配嵌套目录）
+# download data
 download_sra() {
     local srr=$1
     local sra_dir="${BASE_DIR}/${srr}"
     
-    # 预生成的目标路径（适配prefetch的嵌套结构）
-    local prefetch_dir="${sra_dir}/${srr}"  # 新增层级
-    local sra_path="${prefetch_dir}/${srr}.sra"  # 实际存储路径
+    local prefetch_dir="${sra_dir}/${srr}"  
+    local sra_path="${prefetch_dir}/${srr}.sra"  
 
     mkdir -p "$sra_dir"
 
-    # 存在性检查（适配新路径）
     if [ -f "$sra_path" ]; then
         echo "[$(date)] 发现现有SRA文件: ${srr}" | tee -a $LOG_FILE
         return 0
     fi
 
-    # 执行下载（允许prefetch生成嵌套目录）
+    # 执行下载
     echo "[$(date)] 开始下载: ${srr}" | tee -a $LOG_FILE
     if prefetch -O "$sra_dir" "$srr" >> $LOG_FILE 2>&1; then
         # 确认嵌套目录结构
@@ -55,23 +51,21 @@ download_sra() {
     fi
 }
 
-# 函数：智能转换器
+# 转换
 convert_to_fastq() {
     local srr=$1
     local sra_path="${BASE_DIR}/${srr}/${srr}/${srr}.sra"
     local output_dir="${BASE_DIR}/fastq_output"
     
-    # 创建输出目录
     mkdir -p "$output_dir"
 
-    # 结果文件检查（兼容单端/双端）
     local output_files=(
-        "${output_dir}/${srr}.fastq"           # 单端情况
-        "${output_dir}/${srr}_1.fastq"         # 双端情况
+        "${output_dir}/${srr}.fastq"           
+        "${output_dir}/${srr}_1.fastq"       
         "${output_dir}/${srr}_2.fastq"
     )
 
-    # 已存在文件检测
+    # avoid repeat
     if [ -f "${output_files[1]}" ] && [ -f "${output_files[2]}" ]; then
         echo "[$(date)] 检测到完整FASTQ文件: ${srr}" | tee -a $LOG_FILE
         return 0
@@ -80,13 +74,12 @@ convert_to_fastq() {
         return 0
     fi
 
-    # 执行转换（自动检测布局）
+    # 转换
     echo "[$(date)] 开始转换: ${srr}" | tee -a $LOG_FILE
     fasterq-dump --split-3 --threads $THREADS --outdir "$output_dir" "$sra_path" >> $LOG_FILE 2>&1
 
     # 结果验证
     if [ $? -eq 0 ]; then
-        # 检测实际生成的文件
         local generated_files=($(ls "${output_dir}/${srr}"*fastq 2>/dev/null))
         if [ ${#generated_files[@]} -ge 1 ]; then
             echo "[$(date)] 转换成功: 生成 ${#generated_files[@]} 个文件" | tee -a $LOG_FILE
@@ -101,14 +94,13 @@ convert_to_fastq() {
     fi
 }
 
-# 主流程控制
 export BASE_DIR LOG_FILE THREADS
 export -f download_sra convert_to_fastq
 
-# 阶段1：并行下载（限制同时下载数）
+# 并行下载
 printf "%s\n" "${SRR_LIST[@]}" | xargs -P 2 -I {} bash -c 'download_sra "$@"' _ {}
 
-# 阶段2：顺序转换（避免IO瓶颈）
+# 顺序转换
 for srr in "${SRR_LIST[@]}"; do
     convert_to_fastq "$srr"
 done
